@@ -1,4 +1,4 @@
-from Grid_And_Figures import LINES, empty_cells, shares_attr
+from Grid_And_Figures import LINES, empty_cells, shares_attr, check_win
 
 
 def PieceSelectionHeuristic(piece, board):
@@ -45,6 +45,10 @@ def three_match_count(board, row, col):
 
 def PiecePlacementHeuristic(row, col, piece, board, remaining):
     board[row][col] = piece
+
+    if check_win(board):
+        board[row][col] = None
+        return 1000
 
     f1 = two_match_count(board, row, col)
     f2 = three_match_count(board, row, col)
