@@ -1,3 +1,5 @@
+import random
+
 ALL_PIECES = [
     (a, b, c, d)
     for a in range(2)
@@ -59,3 +61,32 @@ def print_remaining(remaining):
     for i, p in enumerate(remaining):
         print(f'  {i:2d}: {piece_str(p)}  {p}')
     print()
+
+def generate_random_board_state(num_pieces: int):
+    """
+    Places `num_pieces` pieces randomly on the board.
+
+    Returns:
+        board     : 4x4 list with placed pieces (or None for empty cells)
+        remaining : list of pieces not placed on the board
+
+    Raises:
+        ValueError: if num_pieces is not between 0 and 16.
+    """
+    if not (0 <= num_pieces <= 16):
+        raise ValueError(f"num_pieces must be between 0 and 16, got {num_pieces}")
+
+    board = [[None] * 4 for _ in range(4)]
+
+    pieces = random.sample(ALL_PIECES, num_pieces)  # pick pieces without repetition
+    cells = random.sample([(r, c) for r in range(4) for c in range(4)], num_pieces)
+
+    for piece, (r, c) in zip(pieces, cells):
+        board[r][c] = piece
+
+    remaining = [p for p in ALL_PIECES if p not in pieces]
+
+    if (not (check_win(board))):
+        return board, remaining
+    else:
+        return None, None
