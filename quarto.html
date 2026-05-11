@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=EB+Garamond:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0D0B08;color:#E5D9C0;font-family:'EB Garamond',Georgia,serif;min-height:100vh}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(196,150,60,.5)}60%{box-shadow:0 0 0 7px rgba(196,150,60,0)}}
+@keyframes winPulse{0%,100%{background:rgba(196,150,60,.18)}50%{background:rgba(196,150,60,.38)}}
+.fade{animation:fadeUp .35s ease}
+.active-card{animation:pulse 2.2s infinite}
+.win-cell{animation:winPulse 1s infinite}
+.btn{cursor:pointer;transition:all .15s;border:none;font-family:'EB Garamond',Georgia,serif}
+.btn:active{transform:scale(.96)}
+.tag-btn{padding:5px 13px;border-radius:6px;font-size:13px;cursor:pointer;transition:all .15s;font-family:'EB Garamond',Georgia,serif;font-weight:500}
+.tag-btn:hover{filter:brightness(1.15)}
+.cell{transition:background .12s,border-color .12s,transform .12s;cursor:default}
+.cell.can-click{cursor:pointer}.cell.can-click:hover{transform:scale(1.04)}
+.piece-pool{cursor:default;transition:transform .12s}
+.piece-pool.clickable{cursor:pointer}.piece-pool.clickable:hover{transform:scale(1.18)}
+#server-badge{position:fixed;top:10px;right:14px;font-size:11px;padding:4px 10px;border-radius:10px;font-family:'EB Garamond',Georgia,serif;z-index:999}
+</style>
+</head>
+<body>
+<div id="server-badge">checking...</div>
+<div id="R"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useRef}=React;
+
+/* ══════════════════════════════════════════════════
+   SERVER INTEGRATION
+   All AI moves go to Flask. JS is fallback only.
+══════════════════════════════════════════════════ */
+let SERVER_OK = false;
+
+async function pingServer(){
+  try{
+    const r=await fetch('/ping',{signal:AbortSignal.timeout(1500)});
+    const d=await r.json();
+    SERVER_OK=d.status==='ok';
+  }catch{SERVER_OK=false;}
+  const badge=document.getElementById('server-badge');
+  if(badge){
+    badge.textContent=SERVER_OK?'🟢 Python server':'🔴 JS fallback';
+    badge.style.background=SERVER_OK?'rgba(60,160,60,.18)':'rgba(160,60,60,.18)';
+    badge.style.border=`1px solid ${SERVER_OK?'#3CA040':'#A04030'}`;
+    badge.style.color=SERVER_OK?'#80D060':'#D06050';
+  }
+}
+pingServer();
+
+async function serverMove(algo,board,pool,held,phase,player_id,iterations,depth){
+  const r=await fetch('/move',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({algo,board,pool,held,phase,player_id,iterations,depth})
+  });
+  if(!r.ok) throw new Error('server error');
+  return await r.json(); // {cell, next_piece}
+}
+
+/* ══════════════════════════════════════════════════
+   GAME ENGINE (used for win detection + JS fallback)
+══════════════════════════════════════════════════ */
+const LINES=[[0,1,2,3],[4,5,6,7],[8,9,10,11],[12,13,14,15],[0,4,8,12],[1,5,9,13],[2,6,10,14],[3,7,11,15],[0,5,10,15],[3,6,9,12]];
+const sharesAttr=ps=>{for(let b=0;b<4;b++){const m=1<<b;if(ps.every(p=>(p&m)===0)||ps.every(p=>(p&m)!==0))return true;}return false;};
+const checkWin=board=>{for(const l of LINES){const ps=l.map(i=>board[i]);if(ps.every(p=>p!==null)&&sharesAttr(ps))return l;}return null;};
+const emptyCells=board=>board.reduce((a,p,i)=>p===null?[...a,i]:a,[]);
+const isFull=board=>board.every(p=>p!==null);
+const rnd=arr=>arr[Math.floor(Math.random()*arr.length)];
+const randPiece=pool=>pool.length>0?pool[Math.floor(Math.random()*pool.length)]:null;
+
+/* ══ JS FALLBACK AI ══ */
+const h1=(piece,board)=>{let d=0;for(const i of emptyCells(board)){const t=board.slice();t[i]=piece;for(const l of LINES){const ps=l.map(j=>t[j]);if(ps.every(p=>p!==null)&&sharesAttr(ps))d++;}}return -d;};
+const matchCount=(board,idx,n)=>{let c=0;for(const l of LINES){if(!l.includes(idx))continue;const fl=l.map(i=>board[i]).filter(p=>p!==null);if(fl.length===n){for(let b=0;b<4;b++){const m=1<<b;if(fl.every(p=>(p&m)===0)||fl.every(p=>(p&m)!==0)){c++;break;}}}}return c;};
+const h2=(idx,piece,board,rem)=>{const t=board.slice();t[idx]=piece;if(checkWin(t))return 1000;const f1=matchCount(t,idx,2),f2=matchCount(t,idx,3);const wh1=rem.length>0?Math.min(...rem.map(p=>h1(p,t))):0;return 2*f1+5*f2+10*wh1;};
+function nmPlace(board,rem,piece,depth,useH){const cells=emptyCells(board);if(!cells.length)return{cell:null,val:0};let bcs=[],bv=-99999;for(const c of cells){const nb=board.slice();nb[c]=piece;if(checkWin(nb))return{cell:c,val:1000};if(!rem.length||isFull(nb)){if(0>bv){bv=0;bcs=[c];}else if(0===bv)bcs.push(c);continue;}if(depth<=0){const s=useH?h2(c,piece,board,rem):0;if(s>bv){bv=s;bcs=[c];}else if(s===bv)bcs.push(c);continue;}const{val:v}=nmChoose(nb,rem,depth-1,useH);if(v>bv){bv=v;bcs=[c];}else if(v===bv)bcs.push(c);}return{cell:bcs.length?rnd(bcs):cells[0],val:bv};}
+function nmChoose(board,rem,depth,useH){if(!rem.length)return{piece:null,val:0};if(depth<=0){if(useH){let bp=[],bv=-99999;for(const p of rem){const s=h1(p,board);if(s>bv){bv=s;bp=[p];}else if(s===bv)bp.push(p);}return{piece:rnd(bp),val:bv};}return{piece:randPiece(rem),val:0};}let bp=[],bv=-99999;for(const p of rem){const r2=rem.filter(x=>x!==p);const{val:v}=nmPlace(board,r2,p,depth-1,useH);const nv=-v;if(nv>bv){bv=nv;bp=[p];}else if(nv===bv)bp.push(p);}return{piece:bp.length?rnd(bp):rem[0],val:bv};}
+const chooseNext=(board,pool,useHP)=>{if(!pool.length)return null;if(useHP)return pool.reduce((b,p)=>h1(p,board)>=h1(b,board)?p:b,pool[0]);return randPiece(pool);};
+const rollout=(board,pool,held,useHP)=>{let b=board.slice(),p=pool.slice(),h=held,me=true;for(let t=0;t<40;t++){const cs=emptyCells(b);if(!cs.length)return 0;let bc=rnd(cs);for(const c of cs){const tb=b.slice();tb[c]=h;if(checkWin(tb)){bc=c;break;}}b=b.slice();b[bc]=h;if(checkWin(b))return me?1:-1;if(!p.length)return 0;const np=chooseNext(b,p,useHP);p=p.filter(x=>x!==np);h=np;me=!me;}return 0;};
+const mctsMove=(board,pool,held,useHP,iters=500)=>{const cells=emptyCells(board);for(const c of cells){const t=board.slice();t[c]=held;if(checkWin(t)){return{cell:c,nextPiece:chooseNext(t,pool,useHP)};}}const W={},N={};cells.forEach(c=>{W[c]=0;N[c]=0.001;});for(let i=0;i<iters;i++){const tot=cells.reduce((s,c)=>s+N[c],0);const c=cells.reduce((best,c)=>{const u=W[c]/N[c]+1.41*Math.sqrt(Math.log(tot+1)/N[c]);const bu=W[best]/N[best]+1.41*Math.sqrt(Math.log(tot+1)/N[best]);return u>bu?c:best;},cells[0]);const nb=board.slice();nb[c]=held;if(!pool.length){N[c]++;continue;}const np=chooseNext(nb,pool,useHP);const rp=pool.filter(x=>x!==np);const r=rollout(nb,rp,np,useHP);W[c]+=(r>0?1:r===0?0.5:0);N[c]++;}const bc=cells.reduce((a,b)=>W[b]/N[b]>W[a]/N[a]?b:a,cells[0]);const nb=board.slice();nb[bc]=held;return{cell:bc,nextPiece:chooseNext(nb,pool,useHP)};};
+
+/* JS fallback dispatcher */
+async function jsFallbackMove(algo,board,pool,held,iterations=500,depth=2){
+  const cells=emptyCells(board);
+  for(const c of cells){const t=board.slice();t[c]=held;if(checkWin(t))return{cell:c,next_piece:chooseNext(t,pool,algo!=='random'&&algo!=='minimax_nh')};}
+  switch(algo){
+    case'random':{return{cell:rnd(cells),next_piece:randPiece(pool)};}
+    case'heuristic':{let bc=cells[0],bv=-99999;for(const c of cells){const s=h2(c,held,board,pool);if(s>bv){bv=s;bc=c;}}const nb=board.slice();nb[bc]=held;return{cell:bc,next_piece:chooseNext(nb,pool,true)};}
+    case'minimax_nh':case'ab_nh':{const{cell}=nmPlace(board,pool,held,depth,false);const nb=board.slice();nb[cell]=held;const{piece:np}=nmChoose(nb,pool,depth,false);return{cell,next_piece:np!==null&&np!==undefined?np:randPiece(pool)};}
+    case'minimax_h':case'ab_h':{const{cell}=nmPlace(board,pool,held,depth,true);const nb=board.slice();nb[cell]=held;const{piece:np}=nmChoose(nb,pool,depth,true);return{cell,next_piece:np!==null&&np!==undefined?np:chooseNext(nb,pool,true)};}
+    case'mcts_random':return(r=>{return{cell:r.cell,next_piece:r.nextPiece};})(mctsMove(board,pool,held,false,iterations));
+    case'mcts_heuristic':return(r=>{return{cell:r.cell,next_piece:r.nextPiece};})(mctsMove(board,pool,held,true,iterations));
+    default:return{cell:rnd(cells),next_piece:randPiece(pool)};
+  }
+}
+function jsFallbackChoose(algo,board,pool,depth=2){
+  if(!pool.length)return null;
+  switch(algo){
+    case'random':case'mcts_random':return randPiece(pool);
+    case'heuristic':case'mcts_heuristic':return chooseNext(board,pool,true);
+    case'minimax_h':case'ab_h':{const{piece}=nmChoose(board,pool,depth,true);return piece!==null&&piece!==undefined?piece:randPiece(pool);}
+    case'minimax_nh':case'ab_nh':{const{piece}=nmChoose(board,pool,depth,false);return piece!==null&&piece!==undefined?piece:randPiece(pool);}
+    default:return randPiece(pool);
+  }
+}
+
+/* ══ MAIN AI DISPATCHER ══
+   Tries Python server first. Falls back to JS if server is down. */
+async function aiMove(algo,board,pool,held,phase,player_id,iterations,depth){
+  if(SERVER_OK){
+    try{
+      return await serverMove(algo,board,pool,held,phase,player_id,iterations,depth);
+    }catch(e){
+      console.warn('Server call failed, using JS fallback:',e);
+      SERVER_OK=false;
+      pingServer();
+    }
+  }
+  // JS fallback — use depth for minimax, iterations for mcts
+  if(phase==='select'){
+    const piece=jsFallbackChoose(algo,board,pool,depth);
+    return{cell:null,next_piece:piece};
+  } else {
+    return await jsFallbackMove(algo,board,pool,held,iterations,depth);
+  }
+}
+
+/* ══ PIECE SVG ══ */
+const pLabel=p=>`${p&1?'T':'S'}${p&2?'D':'L'}${p&4?'C':'Q'}${p&8?'H':'F'}`;
+const pDesc=p=>p==null?'':`${p&1?'Tall':'Short'} ${p&2?'Dark':'Light'} ${p&4?'Circle':'Square'} ${p&8?'Hollow':'Solid'}`;
+
+function Piece({p,sz=46,selected=false,faded=false}){
+  if(p==null)return null;
+  const tall=!!(p&1),dark=!!(p&2),circ=!!(p&4),hol=!!(p&8);
+  const fill=dark?'#2A1508':'#C4963C',hi=dark?'#4A2810':'#E0B658';
+  const stk=selected?'#E8C050':dark?'#5A2E10':'#8A6020';
+  const bh=tall?32:20,bw=circ?22:28,cx=sz/2,cy=sz/2,gid=`g${p}s${sz}`;
+  return(
+    <svg width={sz} height={sz} viewBox={`0 0 ${sz} ${sz}`} style={{display:'block',opacity:faded?.15:1,transition:'opacity .2s'}}>
+      <defs><linearGradient id={gid} x1="0%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stopColor={hi}/><stop offset="100%" stopColor={fill}/></linearGradient></defs>
+      <ellipse cx={cx+1} cy={cy+bh/2+3} rx={bw*.35} ry={3} fill="rgba(0,0,0,.3)"/>
+      {circ
+        ?<ellipse cx={cx} cy={cy} rx={bw/2} ry={bh/2} fill={`url(#${gid})`} stroke={stk} strokeWidth={selected?2.5:1.5}/>
+        :<rect x={cx-bw/2} y={cy-bh/2} width={bw} height={bh} rx={2} fill={`url(#${gid})`} stroke={stk} strokeWidth={selected?2.5:1.5}/>
+      }
+      {hol&&<circle cx={cx} cy={cy-bh*.08} r={Math.min(bw,bh)*.2} fill="none" stroke={dark?'#130A03':'#6A4010'} strokeWidth={2.5}/>}
+      {selected&&<ellipse cx={cx} cy={cy} rx={bw*.75} ry={bh*.75} fill="none" stroke="#E8C050" strokeWidth={1.5} strokeDasharray="4 3" opacity={.7}/>}
+    </svg>
+  );
+}
+
+/* ══ CONSTANTS ══ */
+const ALGOS={
+  random:        {n:'Random',           tag:'random',   d:'Uniformly random — no logic'},
+  heuristic:     {n:'Heuristic',        tag:'heuristic',d:'Greedy h₁+h₂ (w₁=2, w₂=5, w₃=10)'},
+  minimax_nh:    {n:'Minimax',          tag:'minimax',  d:'NegaMax, no evaluation function'},
+  minimax_h:     {n:'Minimax + h',      tag:'minimax+', d:'NegaMax with h₁+h₂ at leaves'},
+  ab_nh:         {n:'Alpha-Beta',       tag:'ab',       d:'Alpha-Beta pruning, no heuristic, TT'},
+  ab_h:          {n:'Alpha-Beta + h',   tag:'ab+',      d:'Alpha-Beta + h₁+h₂ + move ordering + TT'},
+  mcts_random:   {n:'MCTS (random)',    tag:'mcts-r',   d:'Monte Carlo, random piece selection'},
+  mcts_heuristic:{n:'MCTS (heuristic)',tag:'mcts-h',   d:'Monte Carlo, h₁ for piece selection'},
+};
+const MCTS_ALGOS=new Set(['mcts_random','mcts_heuristic']);
+const MM_ALGOS=new Set(['minimax_nh','minimax_h','ab_nh','ab_h']);
+const ITERS_OPTIONS=[50,180,600,2200,3600,8000];
+const DEPTH_OPTIONS=[1,2,3,4];
+
+function TagBtn({label,active,onClick,small}){
+  return(
+    <button className="tag-btn" onClick={onClick} style={{
+      background:active?'rgba(196,150,60,.22)':'rgba(255,255,255,.04)',
+      border:`1px solid ${active?'#C4963C':'#3A2510'}`,
+      color:active?'#E0B658':'#7A5830',fontSize:small?12:13
+    }}>{label}</button>
+  );
+}
+
+/* ══ SETUP ══ */
+function Setup({onStart}){
+  const[mode,setMode]=useState('hva');
+  const[side,setSide]=useState(0);
+  const[a0,setA0]=useState('heuristic');
+  const[a1,setA1]=useState('minimax_h');
+  // per-player settings
+  const[iters0,setIters0]=useState(600);
+  const[iters1,setIters1]=useState(600);
+  const[depth0,setDepth0]=useState(2);
+  const[depth1,setDepth1]=useState(2);
+
+  const AlgoPicker=({label,val,set,iters,setIters,depth,setDepth})=>(
+    <div style={{marginBottom:18}}>
+      <div style={{fontSize:11,letterSpacing:1.2,textTransform:'uppercase',color:'#7A5830',marginBottom:8}}>{label}</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:5,marginBottom:5}}>
+        {Object.entries(ALGOS).map(([k,v])=><TagBtn key={k} label={v.tag} active={val===k} onClick={()=>set(k)} small/>)}
+      </div>
+      <div style={{fontSize:13,color:'#6A4820',fontStyle:'italic',marginBottom:8}}>{ALGOS[val].n} — {ALGOS[val].d}</div>
+      {MCTS_ALGOS.has(val)&&(
+        <div>
+          <div style={{fontSize:11,letterSpacing:1,textTransform:'uppercase',color:'#6A5028',marginBottom:6}}>Iterations</div>
+          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+            {ITERS_OPTIONS.map(n=><TagBtn key={n} label={n.toLocaleString()} active={iters===n} onClick={()=>setIters(n)} small/>)}
+          </div>
+        </div>
+      )}
+      {MM_ALGOS.has(val)&&(
+        <div>
+          <div style={{fontSize:11,letterSpacing:1,textTransform:'uppercase',color:'#6A5028',marginBottom:6}}>Depth</div>
+          <div style={{display:'flex',gap:5}}>
+            {DEPTH_OPTIONS.map(n=><TagBtn key={n} label={`${n}`} active={depth===n} onClick={()=>setDepth(n)} small/>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  function makePlayer(type,name,algo,iters,depth){
+    return{type,name,algo,iterations:iters,depth};
+  }
+
+  function go(){
+    let players;
+    if(mode==='hvh'){
+      players=[makePlayer('human','Player 1',null,600,2),makePlayer('human','Player 2',null,600,2)];
+    }else if(mode==='hva'){
+      const opp=side===0?a1:a0;
+      const oppI=side===0?iters1:iters0;
+      const oppD=side===0?depth1:depth0;
+      const aiP=makePlayer('ai',ALGOS[opp].n,opp,oppI,oppD);
+      const humP=makePlayer('human','You',null,600,2);
+      players=side===0?[humP,aiP]:[aiP,humP];
+    }else{
+      players=[makePlayer('ai',ALGOS[a0].n,a0,iters0,depth0),makePlayer('ai',ALGOS[a1].n,a1,iters1,depth1)];
+    }
+    onStart({players});
+  }
+
+  const oppAlgo=side===0?a1:a0;
+  const oppIters=side===0?iters1:iters0;
+  const oppDepth=side===0?depth1:depth0;
+  const setOppIters=side===0?setIters1:setIters0;
+  const setOppDepth=side===0?setDepth1:setDepth0;
+
+  return(
+    <div className="fade" style={{maxWidth:480,margin:'0 auto',padding:'30px 22px'}}>
+      <div style={{textAlign:'center',marginBottom:36}}>
+        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:58,fontWeight:700,color:'#C4963C',letterSpacing:5,lineHeight:1}}>QUARTO</div>
+        <div style={{fontSize:13,color:'#5A4020',letterSpacing:2.5,marginTop:8}}>A GAME OF SHARED FATE</div>
+      </div>
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:11,letterSpacing:1.2,textTransform:'uppercase',color:'#7A5830',marginBottom:8}}>Mode</div>
+        <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>
+          <TagBtn label="Human vs Human" active={mode==='hvh'} onClick={()=>setMode('hvh')}/>
+          <TagBtn label="Human vs AI" active={mode==='hva'} onClick={()=>setMode('hva')}/>
+          <TagBtn label="AI vs AI" active={mode==='ava'} onClick={()=>setMode('ava')}/>
+        </div>
+      </div>
+      {mode==='hva'&&<>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:11,letterSpacing:1.2,textTransform:'uppercase',color:'#7A5830',marginBottom:8}}>You play as</div>
+          <div style={{display:'flex',gap:7}}>
+            <TagBtn label="Player 1 — goes first" active={side===0} onClick={()=>setSide(0)}/>
+            <TagBtn label="Player 2 — goes second" active={side===1} onClick={()=>setSide(1)}/>
+          </div>
+        </div>
+        <AlgoPicker label="AI Opponent" val={oppAlgo} set={side===0?setA1:setA0} iters={oppIters} setIters={setOppIters} depth={oppDepth} setDepth={setOppDepth}/>
+      </>}
+      {mode==='ava'&&<>
+        <AlgoPicker label="Player 1" val={a0} set={setA0} iters={iters0} setIters={setIters0} depth={depth0} setDepth={setDepth0}/>
+        <AlgoPicker label="Player 2" val={a1} set={setA1} iters={iters1} setIters={setIters1} depth={depth1} setDepth={setDepth1}/>
+      </>}
+      {mode==='hvh'&&<div style={{marginBottom:18,padding:'12px 16px',borderRadius:8,background:'rgba(255,255,255,.025)',border:'1px solid #2A1A08',fontSize:14,color:'#6A5030',lineHeight:1.7}}>Two players take turns on the same device.</div>}
+      <button className="btn" onClick={go} style={{width:'100%',padding:'15px 0',borderRadius:9,marginTop:6,background:'linear-gradient(to bottom,#C4963C,#9A7020)',fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:700,color:'#1A0E02',letterSpacing:2,boxShadow:'0 4px 20px rgba(196,150,60,.28)'}}>Begin</button>
+      <div style={{marginTop:20,padding:'12px 16px',borderRadius:8,background:'rgba(255,255,255,.02)',border:'1px solid #241508',fontSize:13,color:'#6A5030',lineHeight:1.8}}>
+        <strong style={{color:'#9A7040',display:'block',marginBottom:4}}>Rules</strong>
+        Each turn: <span style={{color:'#A88040'}}>place</span> the piece your opponent handed you, then <span style={{color:'#A88040'}}>choose</span> a piece to hand back.<br/>
+        <span style={{color:'#A88040'}}>Win</span> by completing a line of 4 sharing any one attribute — height, color, shape, or top.
+      </div>
+    </div>
+  );
+}
+
+/* ══ MAIN GAME ══ */
+function App(){
+  const[screen,setScreen]=useState('setup');
+  const[cfg,setCfg]=useState(null);
+  const[gs,setGs]=useState(null);
+  const[thinking,setThinking]=useState(false);
+  const[hover,setHover]=useState(-1);
+  const[dots,setDots]=useState('');
+  const aiBusy=useRef(false);
+
+  useEffect(()=>{
+    if(!thinking)return;
+    const t=setInterval(()=>setDots(d=>d.length>=3?'':d+'.'),380);
+    return()=>clearInterval(t);
+  },[thinking]);
+
+  function startGame(config){
+    setCfg(config);
+    setGs({board:Array(16).fill(null),pool:Array.from({length:16},(_,i)=>i),held:null,cur:0,phase:'select',winner:null,winLine:null});
+    aiBusy.current=false;setThinking(false);setScreen('game');
+  }
+
+  useEffect(()=>{
+    if(!gs||gs.winner!==null||!cfg)return;
+    const pl=cfg.players[gs.cur];
+    if(pl.type!=='ai')return;
+    if(aiBusy.current)return;
+    aiBusy.current=true;
+    setThinking(true);
+    const delay=300; // fixed small delay so UI updates before AI thinks
+    const iters=pl.iterations??600;
+    const depth=pl.depth??2;
+    let cancelled=false;
+    const tid=setTimeout(async()=>{
+      if(cancelled)return;
+      try{
+        const s=gs;
+        if(s.phase==='select'){
+          /* SELECT: AI picks a piece to give opponent */
+          const resp=await aiMove(pl.algo,s.board,s.pool,null,'select',s.cur,iters,depth);
+          const piece=resp.next_piece;
+          setGs(p=>!p||p.winner!==null?p:{...p,pool:p.pool.filter(x=>x!==piece),held:piece,cur:1-p.cur,phase:'place'});
+        }else{
+          /* PLACE: AI places held piece and picks next piece */
+          const resp=await aiMove(pl.algo,s.board,s.pool,s.held,'place',s.cur,iters,depth);
+          const cell=resp.cell;
+          const nextPiece=resp.next_piece;
+          setGs(p=>{
+            if(!p||p.winner!==null)return p;
+            const nb=p.board.slice();nb[cell]=p.held;
+            const wl=checkWin(nb);
+            if(wl)return{...p,board:nb,winner:p.cur,winLine:wl};
+            if(!p.pool.length||nextPiece===null||nextPiece===undefined)return{...p,board:nb,winner:'draw'};
+            return{...p,board:nb,pool:p.pool.filter(x=>x!==nextPiece),held:nextPiece,cur:1-p.cur,phase:'place'};
+          });
+        }
+      }catch(e){console.error('AI move error:',e);}
+      finally{if(!cancelled){aiBusy.current=false;setThinking(false);}}
+    },delay);
+    return()=>{cancelled=true;clearTimeout(tid);aiBusy.current=false;};
+  },[gs,cfg]);
+
+  function clickCell(i){
+    if(!gs||gs.winner!==null||gs.phase!=='place'||thinking)return;
+    if(cfg.players[gs.cur].type!=='human')return;
+    if(gs.board[i]!==null)return;
+    const nb=gs.board.slice();nb[i]=gs.held;
+    const wl=checkWin(nb);
+    if(wl){setGs(p=>({...p,board:nb,winner:p.cur,winLine:wl}));return;}
+    if(!gs.pool.length){setGs(p=>({...p,board:nb,winner:'draw'}));return;}
+    setGs(p=>({...p,board:nb,held:null,phase:'select'}));
+  }
+
+  function clickPiece(piece){
+    if(!gs||gs.winner!==null||gs.phase!=='select'||thinking)return;
+    if(cfg.players[gs.cur].type!=='human')return;
+    if(!gs.pool.includes(piece))return;
+    setGs(p=>({...p,pool:p.pool.filter(x=>x!==piece),held:piece,cur:1-p.cur,phase:'place'}));
+  }
+
+  if(screen==='setup')return<Setup onStart={startGame}/>;
+
+  const{board,pool,held,cur,phase,winner,winLine}=gs;
+  const curP=cfg.players[cur];
+  const isHuman=!winner&&!thinking&&curP.type==='human';
+  const placed=board.filter(p=>p!==null).length;
+  const status=winner!==null
+    ?(winner==='draw'?'Board full — draw!':`${cfg.players[winner].name} wins!`)
+    :thinking?`${curP.name} thinking${dots}`
+    :phase==='place'?`${curP.name} — place your piece`
+    :`${curP.name} — choose a piece to give`;
+  const statusColor=winner!==null?(winner==='draw'?'#9A7850':'#E8C050'):'#A08050';
+
+  return(
+    <div className="fade" style={{minHeight:'100vh',background:'#0D0B08',display:'flex',flexDirection:'column',alignItems:'center',padding:'14px 10px 24px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:12}}>
+        <button className="btn" onClick={()=>setScreen('setup')} style={{background:'transparent',border:'1px solid #3A2010',color:'#7A5830',fontSize:12,padding:'4px 10px',borderRadius:6,fontFamily:'inherit'}}>← Home</button>
+        <span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:24,fontWeight:700,color:'#C4963C',letterSpacing:3}}>QUARTO</span>
+        <span style={{fontSize:12,color:'#4A3018',borderLeft:'1px solid #2A1808',paddingLeft:14}}>{placed}/16 placed</span>
+      </div>
+      <div style={{display:'flex',gap:10,marginBottom:10,width:'100%',maxWidth:548}}>
+        {cfg.players.map((pl,idx)=>(
+          <div key={idx} className={cur===idx&&!winner&&!thinking?'active-card':''} style={{flex:1,padding:'8px 14px',borderRadius:8,textAlign:'center',border:`1.5px solid ${cur===idx&&!winner?'#C4963C':'#2A1808'}`,background:cur===idx&&!winner?'rgba(196,150,60,.08)':'rgba(255,255,255,.02)',transition:'all .25s'}}>
+            <div style={{fontSize:14,fontWeight:600,color:winner===idx?'#F0C040':'#C4963C'}}>{winner===idx?'★ ':''}{pl.name}</div>
+            <div style={{fontSize:12,color:'#6A4820',marginTop:2,fontStyle:'italic'}}>{pl.type==='ai'?ALGOS[pl.algo].n:'Human'}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{padding:'6px 22px',marginBottom:12,borderRadius:20,background:winner?'rgba(196,150,60,.14)':'rgba(255,255,255,.03)',border:`1px solid ${winner?'#C4963C':'#2A1808'}`,fontSize:14,color:statusColor,textAlign:'center',maxWidth:500,width:'100%'}}>{status}</div>
+      <div style={{display:'flex',gap:12,alignItems:'flex-start',flexWrap:'wrap',justifyContent:'center'}}>
+        <div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,68px)',gap:4,padding:10,borderRadius:10,background:'#1A100A',border:'2px solid #3A2010',boxShadow:'0 10px 40px rgba(0,0,0,.7)'}}>
+            {board.map((piece,i)=>{
+              const isWin=winLine?.includes(i);
+              const canClick=isHuman&&phase==='place'&&piece===null;
+              const isHov=hover===i&&canClick;
+              return(
+                <div key={i} className={`cell${isWin?' win-cell':''}${canClick?' can-click':''}`}
+                  onClick={()=>clickCell(i)} onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(-1)}
+                  style={{width:68,height:68,borderRadius:5,border:`1.5px solid ${isWin?'#C4963C':isHov?'#6A4020':'#2E1A0C'}`,background:isWin?'rgba(196,150,60,.2)':isHov?'rgba(196,150,60,.07)':'rgba(0,0,0,.2)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  {piece!==null?<Piece p={piece} sz={52}/>:isHov&&held!==null?<Piece p={held} sz={52} faded/>:<span style={{fontSize:10,color:'#2E1A0C',userSelect:'none'}}>{i}</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{marginTop:8,fontSize:11,color:'#3A2210',textAlign:'center'}}>T/S=Tall/Short · D/L=Dark/Light · C/Q=Circle/Square · H/F=Hollow/Full</div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:9,width:188}}>
+          <div style={{padding:12,borderRadius:9,border:`1.5px solid ${held!==null?'#C4963C':'#2A1808'}`,background:'rgba(255,255,255,.02)'}}>
+            <div style={{fontSize:10,letterSpacing:1.2,textTransform:'uppercase',color:'#7A5830',marginBottom:7}}>{phase==='place'?'Piece to place':'Select a piece'}</div>
+            <div style={{minHeight:62,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4}}>
+              {held!==null
+                ?<><Piece p={held} sz={52} selected/><div style={{fontSize:11,color:'#8A6030',textAlign:'center',lineHeight:1.5}}><strong style={{color:'#A88040',letterSpacing:.5}}>{pLabel(held)}</strong><br/><span style={{fontSize:10}}>{pDesc(held)}</span></div></>
+                :<span style={{color:'#2A1808',fontSize:20}}>—</span>}
+            </div>
+          </div>
+          <div style={{padding:12,borderRadius:9,border:'1.5px solid #2A1808',background:'rgba(255,255,255,.015)'}}>
+            <div style={{fontSize:10,letterSpacing:1.2,textTransform:'uppercase',color:'#7A5830',marginBottom:7}}>
+              Pool ({pool.length}){isHuman&&phase==='select'&&<span style={{color:'#C4963C'}}> — tap to give</span>}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:2}}>
+              {Array.from({length:16},(_,p)=>{
+                const inPool=pool.includes(p);
+                const clickable=isHuman&&phase==='select'&&inPool;
+                return(
+                  <div key={p} className={`piece-pool${clickable?' clickable':''}`}
+                    onClick={()=>clickPiece(p)} title={pDesc(p)}
+                    style={{width:36,height:36,borderRadius:4,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${clickable?'#5A3010':'transparent'}`,background:clickable?'rgba(196,150,60,.06)':'transparent'}}>
+                    <Piece p={p} sz={28} faded={!inPool}/>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{padding:'10px 12px',borderRadius:9,border:'1px solid #1E1208',background:'rgba(255,255,255,.01)',fontSize:12,color:'#5A4020',lineHeight:2}}>
+            <div style={{fontWeight:600,color:'#7A5830',marginBottom:3}}>Algorithms</div>
+            {Object.entries(ALGOS).map(([k,v])=>(<div key={k}><span style={{color:'#8A6030',fontWeight:500}}>{v.tag}</span> — {v.n}</div>))}
+          </div>
+        </div>
+      </div>
+      {winner!==null&&(
+        <div className="fade" style={{display:'flex',gap:10,marginTop:20}}>
+          <button className="btn" onClick={()=>startGame(cfg)} style={{padding:'12px 28px',borderRadius:8,background:'linear-gradient(to bottom,#C4963C,#9A7020)',fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,color:'#1A0E02',letterSpacing:1.5}}>Play Again</button>
+          <button className="btn" onClick={()=>setScreen('setup')} style={{padding:'12px 20px',borderRadius:8,background:'transparent',border:'1px solid #3A2010',fontSize:14,color:'#7A5830',fontFamily:'inherit'}}>New Setup</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('R')).render(<App/>);
+</script>
+</body>
+</html>
