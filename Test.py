@@ -12,6 +12,11 @@ from Monte_Carlo import MCTSAgent
 # ── MCTS Wrapper for Test Harness ─────────────────────────────────────────────
 
 class MCTSTestWrapper:
+    """
+    Adapter class to wrap the MCTSAgent into the tournament/test harness structure.
+    Coordinates turn IDs and caches picked pieces between separate game cycle steps.
+    """
+
     def __init__(self, iterations=100, piece_strategy="heuristic"):
         # player_id is updated dynamically in play_game
         # Pass the strategy through to the MCTSAgent
@@ -19,6 +24,7 @@ class MCTSTestWrapper:
         self.cached_piece = None
 
     def place_piece(self, board, remaining, piece, is_max):
+        """Updates agent perspective, triggers simulation, and stores subsequent piece selection."""
         # Update internal player_id to match turn
         self.agent.player_id = 0 if is_max else 1
         # Run the MCTS simulation
@@ -28,12 +34,15 @@ class MCTSTestWrapper:
         return pos
 
     def choose_piece(self, board, remaining, is_max):
+        """Returns the pre-computed piece chosen during the simulation phase."""
         return self.cached_piece
 
 
 # ── Original Agents ───────────────────────────────────────────────────────────
 
 class RandomAgent:
+    """Baseline agent that makes random placement and selection choices."""
+
     def choose_piece(self, board, remaining, is_max):
         return random.choice(remaining)
 
@@ -42,6 +51,8 @@ class RandomAgent:
 
 
 class HeuristicOnlyAgent:
+    """Greedy evaluation agent utilizing standalone strategic look-aheads without tree searches."""
+
     def choose_piece(self, board, remaining, is_max):
         return max(remaining, key=lambda p: PieceSelectionHeuristic(p, board))
 
@@ -58,6 +69,10 @@ class HeuristicOnlyAgent:
 # ── Play one game ─────────────────────────────────────────────────────────────
 
 def play_game(agent0, agent1):
+    """
+    Simulates a single match instance between two agents.
+    Manages alternating turns, piece assignments, and checks win/draw flags.
+    """
     board = [[None] * 4 for _ in range(4)]
     remaining = list(ALL_PIECES)
     placer = 0
@@ -72,6 +87,7 @@ def play_game(agent0, agent1):
         r, c = pos
         board[r][c] = piece
 
+        # Terminal evaluations
         if check_win(board):
             return placer
         if is_full(board):
@@ -82,12 +98,16 @@ def play_game(agent0, agent1):
             remaining.remove(next_piece)
             piece = next_piece
 
-        placer = 1 - placer
+        placer = 1 - placer  # Invert player turn assignment
 
 
 # ── Run Matchup ───────────────────────────────────────────────────────────────
 
 def run_matchup(name_a, agent_a, name_b, agent_b, n=50):
+    """
+    Executes a round-robin style series of games between two specified agents.
+    Alternates starting positions to balance statistical bias and prints telemetry metrics.
+    """
     wins_a = wins_b = draws = 0
     start_time = time.time()
 
@@ -118,7 +138,8 @@ def run_matchup(name_a, agent_a, name_b, agent_b, n=50):
 # ── Execution ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    DEPTH = 3
+    # Hyperparameters for Search Testing Configuration
+    DEPTH = 1
     GAMES = 100
     Iteration1H = 15
     Iteration2H = 180
@@ -135,6 +156,7 @@ if __name__ == "__main__":
     Depth3 = 3
     Depth4 = 4
 
+    # Agent Initialization Framework
     random_agent = RandomAgent()
     heuristic_agent = HeuristicOnlyAgent()
     minimax_h = MinimaxAgent(depth=DEPTH)
@@ -142,9 +164,8 @@ if __name__ == "__main__":
     minimax_nh = MinimaxAgentNoHeuristic(depth=DEPTH)
     minimax_NoAB_NoH = MinimaxAgentNoHeuristic2(depth=DEPTH)
 
-    minimax_hplus1 = MinimaxAgent(depth=DEPTH+1)
-    minimax_nhplus1 = MinimaxAgentNoHeuristic(depth=DEPTH+1)
-
+    minimax_hplus1 = MinimaxAgent(depth=DEPTH + 1)
+    minimax_nhplus1 = MinimaxAgentNoHeuristic(depth=DEPTH + 1)
 
     # Instantiate MCTS with different strategies
     mcts_heuristic1 = MCTSTestWrapper(iterations=Iteration1H, piece_strategy="heuristic")
@@ -158,17 +179,16 @@ if __name__ == "__main__":
     mcts_heuristic5 = MCTSTestWrapper(iterations=Iteration5H, piece_strategy="heuristic")
     mcts_random5 = MCTSTestWrapper(iterations=Iteration5NoH, piece_strategy="random")
 
-    minimax_NoAB_H1 = MinimaxAgent2(depth = Depth1)
-    minimax_NoAB_NoH1 = MinimaxAgentNoHeuristic2(depth = Depth1)
-    minimax_NoAB_H2 = MinimaxAgent2(depth = Depth2)
+    minimax_NoAB_H1 = MinimaxAgent2(depth=Depth1)
+    minimax_NoAB_NoH1 = MinimaxAgentNoHeuristic2(depth=Depth1)
+    minimax_NoAB_H2 = MinimaxAgent2(depth=Depth2)
     minimax_NoAB_NoH2 = MinimaxAgentNoHeuristic2(depth=Depth2)
-    minimax_NoAB_H3 = MinimaxAgent2(depth = Depth3)
-    minimax_NoAB_NoH3 = MinimaxAgentNoHeuristic2(depth = Depth3)
+    minimax_NoAB_H3 = MinimaxAgent2(depth=Depth3)
+    minimax_NoAB_NoH3 = MinimaxAgentNoHeuristic2(depth=Depth3)
     minimax_AB_H1 = MinimaxAgent(depth=Depth3)
     minimax_AB_NoH1 = MinimaxAgentNoHeuristic(depth=Depth3)
     minimax_AB_H2 = MinimaxAgent(depth=Depth4)
     minimax_AB_NoH2 = MinimaxAgentNoHeuristic2(depth=Depth4)
-
 
     # print(f'Running matchups ({GAMES} games each, depth={DEPTH})\n')
 
@@ -181,13 +201,13 @@ if __name__ == "__main__":
 
     # run_matchup('Minimax + AB Heuristic + 1', minimax_hplus1, 'Minimax + NO Ab Heuristic', minimax_NoAB_H, GAMES)
     # run_matchup('Minimax + No AB + No Heuristic', minimax_NoAB_NoH , 'Minimax + AB no Heuristics + 1', minimax_nhplus1, GAMES)
-    # run_matchup('Minimax + AB Heuristic', minimax_h, 'Heuristic Only', heuristic_agent, GAMES)
-    # run_matchup('Minimax + AB No Heuristic', minimax_nh, 'Heuristic Only', heuristic_agent, GAMES)
+
+    # Tournament Matrix Activations
+    run_matchup('Minimax + AB Heuristic', minimax_h, 'Heuristic Only', heuristic_agent, GAMES)
+    run_matchup('Minimax + AB No Heuristic', minimax_nh, 'Heuristic Only', heuristic_agent, GAMES)
     # run_matchup('Minimax + No AB Heuristic', minimax_NoAB_H, 'Heuristic Only', heuristic_agent, GAMES)
     # run_matchup('Minimax + No AB No Heuristic', minimax_nh, 'Heuristic Only', heuristic_agent, GAMES)
     # run_matchup('Heuristic Only', heuristic_agent, 'Random', random_agent, GAMES)
-
-
 
     # Original active matchups
     # run_matchup('MCTS', mcts_agent, 'Minimax', minimax_NoAB_H, GAMES)
@@ -205,14 +225,14 @@ if __name__ == "__main__":
     # run_matchup('mcts + Random', mcts_random5, 'Random', random_agent, GAMES)
 
     # Try different MCTS strategies against Different Minimax
-    run_matchup('MCTS (Heuristic) (iteration = 15)', mcts_heuristic1, 'Minimax No AB (Heuristic) (Depth = 1)', minimax_NoAB_H1, GAMES)
-    run_matchup('MCTS (Heuristic) (iteration = 180)', mcts_heuristic2, 'Minimax No AB (Heuristic) (Depth = 2)', minimax_NoAB_H2, GAMES)
-    run_matchup('MCTS (Heuristic Strategy) (iteration = 2200)', mcts_heuristic3, 'Minimax No AB (Heuristic Strategy) (Depth = 3)', minimax_NoAB_H3, GAMES)
-    run_matchup('MCTS (Random) (iteration = 5)', mcts_random1, 'Minimax No AB (Random) (Depth = 1)', minimax_NoAB_NoH1, GAMES)
-    run_matchup('MCTS (Random) (iteration = 50)', mcts_random2, 'Minimax No AB (Random) (Depth = 2)', minimax_NoAB_NoH2, GAMES)
-    run_matchup('MCTS (Random)  (iteration = 600)', mcts_random3, 'Minimax No AB (Random) (Depth = 3)', minimax_NoAB_NoH3, GAMES)
+    # run_matchup('MCTS (Heuristic) (iteration = 15)', mcts_heuristic1, 'Minimax No AB (Heuristic) (Depth = 1)', minimax_NoAB_H1, GAMES)
+    # run_matchup('MCTS (Heuristic) (iteration = 180)', mcts_heuristic2, 'Minimax No AB (Heuristic) (Depth = 2)', minimax_NoAB_H2, GAMES)
+    # run_matchup('MCTS (Heuristic Strategy) (iteration = 2200)', mcts_heuristic3, 'Minimax No AB (Heuristic Strategy) (Depth = 3)', minimax_NoAB_H3, GAMES)
+    # run_matchup('MCTS (Random) (iteration = 5)', mcts_random1, 'Minimax No AB (Random) (Depth = 1)', minimax_NoAB_NoH1, GAMES)
+    # run_matchup('MCTS (Random) (iteration = 50)', mcts_random2, 'Minimax No AB (Random) (Depth = 2)', minimax_NoAB_NoH2, GAMES)
+    # run_matchup('MCTS (Random)  (iteration = 600)', mcts_random3, 'Minimax No AB (Random) (Depth = 3)', minimax_NoAB_NoH3, GAMES)
 
-    run_matchup('MCTS (Heuristic) (iteration = 110)', mcts_heuristic4, 'Minimax AB (Heuristic) (Depth = 3)', minimax_AB_H1, GAMES)
-    run_matchup('MCTS (Heuristic Strategy) (iteration = 600)', mcts_heuristic5, 'Minimax No AB (Heuristic Strategy) (Depth = 4)', minimax_AB_H2, GAMES)
-    run_matchup('MCTS (Random) (iteration = 500)', mcts_random4, 'Minimax No AB (Random) (Depth = 3)', minimax_AB_NoH1, GAMES)
-    run_matchup('MCTS (Random)  (iteration = 8000)', mcts_random5, 'Minimax No AB (Random) (Depth = 4)', minimax_AB_NoH2, GAMES)
+    # run_matchup('MCTS (Heuristic) (iteration = 110)', mcts_heuristic4, 'Minimax AB (Heuristic) (Depth = 3)', minimax_AB_H1, GAMES)
+    # run_matchup('MCTS (Heuristic Strategy) (iteration = 600)', mcts_heuristic5, 'Minimax No AB (Heuristic Strategy) (Depth = 4)', minimax_AB_H2, GAMES)
+    # run_matchup('MCTS (Random) (iteration = 500)', mcts_random4, 'Minimax No AB (Random) (Depth = 3)', minimax_AB_NoH1, GAMES)
+    # run_matchup('MCTS (Random)  (iteration = 8000)', mcts_random5, 'Minimax No AB (Random) (Depth = 4)', minimax_AB_NoH2, GAMES)
