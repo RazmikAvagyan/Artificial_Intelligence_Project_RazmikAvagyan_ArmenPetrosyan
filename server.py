@@ -22,24 +22,25 @@ from Minimax_Alpha_Beta_Heuristics import MinimaxAgent as ABMinimaxAgent, negama
 from Minimax_Alpha_Beta_No_Heuristics import MinimaxAgentNoHeuristic as ABMinimaxAgentNoHeuristic, negamax_choose as ab_nh_choose
 from Monte_Carlo import MCTSAgent
 
+# Flask serves the HTML file from the same folder as this script.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 
-# ── Serve the HTML ────────────────────────────────────────────────────────────
-
 @app.route("/")
 def index():
+    """Serve the Quarto web page."""
     return send_from_directory(BASE_DIR, "quarto.html")
 
-# ── Conversion helpers ────────────────────────────────────────────────────────
-
 def int_to_piece(n):
+    """Convert the web UI integer representation into a piece tuple."""
     return (n & 1, (n >> 1) & 1, (n >> 2) & 1, (n >> 3) & 1)
 
 def piece_to_int(t):
+    """Convert a piece tuple back into the web UI integer representation."""
     return t[0] + 2*t[1] + 4*t[2] + 8*t[3]
 
 def flat_to_board(flat):
+    """Convert the flat 16-cell UI board into a 4x4 Python board."""
     board = [[None]*4 for _ in range(4)]
     for i, v in enumerate(flat):
         if v is not None:
@@ -47,14 +48,13 @@ def flat_to_board(flat):
     return board
 
 def cell_to_flat(r, c):
+    """Convert a board row and column into the flat UI cell index."""
     return r * 4 + c
 
-# ── AI endpoint ───────────────────────────────────────────────────────────────
-
-# iterations and depth now come from the request body (set in the HTML UI)
-
+# Main API endpoint called by the browser whenever the AI has to act.
 @app.route("/move", methods=["POST"])
 def move():
+    """Receive the current UI state, run the selected AI, and return the AI move."""
     data     = request.get_json(force=True)
     algo     = data["algo"]
     board    = flat_to_board(data["board"])
@@ -69,7 +69,7 @@ def move():
     cell_flat  = None
     next_piece = None
 
-    # ── SELECT phase ──────────────────────────────────────────────────────────
+    #SELECT phase
     if phase == "select":
         if algo == "random":
             chosen = random.choice(pool)
@@ -113,7 +113,7 @@ def move():
 
         next_piece = piece_to_int(chosen)
 
-    # ── PLACE phase ───────────────────────────────────────────────────────────
+    #PLACE phase
     else:
         remaining = list(pool)   # pool already excludes held
 
@@ -198,6 +198,7 @@ def move():
 
 @app.route("/ping")
 def ping():
+    """Small health-check endpoint used by the web page."""
     return jsonify({"status": "ok"})
 
 

@@ -1,48 +1,17 @@
-"""
-MCTS for Quarto — fully revised.
-
-Algorithm structure:
-  - Each MCTSNode represents a game state where some `player` is about to
-    place a `piece` they were given.
-  - After the placement, the same player chooses a `next_piece` to hand the
-    opponent. So one "move" = (cell, next_piece) pair.
-  - `wins` is always tracked from `root_player`'s perspective. UCB inverts
-    exploitation at opponent nodes so they correctly minimize root's wins.
-
-Bug fixes vs. original:
-  1. `get_legal_moves` no longer offers `next_piece` choices that give the
-     opponent an immediate win (was the main reason MCTS lost).
-  2. `choose_rollout_piece` filters dangerous pieces in simulations too —
-     critical for the win signal not being garbage.
-  3. `choose_piece` (initial select-phase) now filters too, regardless of
-     strategy. Previously fell through to `random.choice` for non-heuristic.
-  4. `place_and_choose` no-children fallback was passing the wrong board to
-     `choose_piece` (board before placement, not after).
-  5. `get_legal_moves` early-exits on terminal states, so we don't waste
-     work computing moves that are never used.
-  6. When ALL pieces are dangerous (forced loss), we now pick the least
-     dangerous one rather than any piece.
-  7. `backpropagate` is now iterative — no recursion.
-  8. UCB inversion is now expressed in terms of `self.player` vs `root_player`
-     (clearer than the original `child.player != root_player` formulation,
-     equivalent in behavior).
-"""
-
+"""Monte Carlo Tree Search implementation for Quarto."""
 import math
 import random
 
 from Grid_And_Figures import check_win, is_full, empty_cells
 from Heuristics import PieceSelectionHeuristic
 
-
+# Draws are counted as half a win during backpropagation.
 DRAW_SCORE = 0.5
 EXPLORATION = 1.41
 
-
-# ─────────────────────────── danger / safety helpers ──────────────────────────
-
+# Safety helpers prevent the AI from handing over obvious winning pieces.
 def piece_danger(piece, board):
-    """Number of empty cells where placing `piece` would immediately win."""
+    """Count how many immediate winning placements a piece would give the next player."""
     danger = 0
     for r, c in empty_cells(board):
         board[r][c] = piece
@@ -53,18 +22,11 @@ def piece_danger(piece, board):
 
 
 def safe_pieces(remaining, board):
-    """
-    Pieces that do NOT give the opponent an immediate win.
-
-    If every remaining piece is dangerous (forced-loss situation), return the
-    least dangerous ones — picking randomly among them is still better than
-    handing over the most-winning piece.
-    """
+    """Return pieces that do not give an immediate win, or the least dangerous forced options."""
     safe = [p for p in remaining if piece_danger(p, board) == 0]
     if safe:
         return safe
 
-    # Forced loss — minimize damage by giving the piece with the fewest wins
     dangers = [(piece_danger(p, board), p) for p in remaining]
     min_d = min(d for d, _ in dangers)
     return [p for d, p in dangers if d == min_d]
@@ -73,6 +35,7 @@ def safe_pieces(remaining, board):
 # ─────────────────────────────── MCTS Node ────────────────────────────────────
 
 class MCTSNode:
+    """One node in the Monte Carlo search tree."""
     def __init__(
         self,
         board,
@@ -86,15 +49,15 @@ class MCTSNode:
     ):
         self.board = [row[:] for row in board]
         self.remaining = list(remaining)
-        self.piece = piece              # piece this node's player must place
-        self.player = player            # who places `piece`
+        self.piece = piece
+        self.player = player
         self.root_player = root_player
         self.piece_strategy = piece_strategy
         self.parent = parent
-        self.move = move                # (r, c, next_piece) that led here
+        self.move = move
 
         self.children = []
-        self.wins = 0.0                 # always counted for root_player
+        self.wins = 0.0
         self.visits = 0
         self.untried = self.get_legal_moves()
 
@@ -284,6 +247,8 @@ class MCTSNode:
 # ─────────────────────────────── MCTS Agent ───────────────────────────────────
 
 class MCTSAgent:
+    """AI agent that chooses moves using Monte Carlo Tree Search."""
+
     def __init__(self, player_id, iterations=500, piece_strategy="heuristic"):
         self.player_id = player_id
         self.iterations = iterations

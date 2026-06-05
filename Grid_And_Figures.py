@@ -1,5 +1,8 @@
+"""Core board utilities for Quarto: pieces, winning lines, board checks, and printing helpers."""
+
 import random
 
+# All Quarto pieces are represented by four binary attributes.
 ALL_PIECES = [
     (a, b, c, d)
     for a in range(2)
@@ -8,6 +11,7 @@ ALL_PIECES = [
     for d in range(2)
 ]
 
+# These are the ten possible winning lines on a 4x4 board.
 LINES = (
     [(0,0),(0,1),(0,2),(0,3)],
     [(1,0),(1,1),(1,2),(1,3)],
@@ -21,18 +25,22 @@ LINES = (
     [(0,3),(1,2),(2,1),(3,0)],
 )
 
+# Short labels make terminal output easier to read.
 ATTR_CHARS = [('S','T'), ('L','D'), ('Q','C'), ('F','H')]
 
 def piece_str(piece):
+    """Convert a 4-attribute piece tuple into a short readable label."""
     return ''.join(ATTR_CHARS[i][piece[i]] for i in range(4))
 
 def shares_attr(pieces):
+    """Return True when all given pieces share at least one common attribute."""
     for attr in range(4):
         if len(set(p[attr] for p in pieces)) == 1:
             return True
     return False
 
 def check_win(board):
+    """Check every row, column, and diagonal for a completed Quarto line."""
     for line in LINES:
         cells = [board[r][c] for r, c in line]
         if None not in cells and shares_attr(cells):
@@ -40,12 +48,15 @@ def check_win(board):
     return False
 
 def is_full(board):
+    """Return True when all sixteen board cells already contain a piece."""
     return all(board[r][c] is not None for r in range(4) for c in range(4))
 
 def empty_cells(board):
+    """List every currently available board position as (row, column)."""
     return [(r, c) for r in range(4) for c in range(4) if board[r][c] is None]
 
 def print_board(board):
+    """Print the board in a compact text format for debugging games in the terminal."""
     print()
     print('        C0     C1     C2     C3')
     for r in range(4):
@@ -57,6 +68,7 @@ def print_board(board):
     print()
 
 def print_remaining(remaining):
+    """Print all pieces that have not been placed yet."""
     print('Available pieces:')
     for i, p in enumerate(remaining):
         print(f'  {i:2d}: {piece_str(p)}  {p}')
